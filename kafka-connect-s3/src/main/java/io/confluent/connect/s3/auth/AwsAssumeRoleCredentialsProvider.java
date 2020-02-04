@@ -21,25 +21,52 @@ import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSCredentialsProvider;
 import com.amazonaws.auth.STSAssumeRoleSessionCredentialsProvider;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
+import io.confluent.common.config.AbstractConfig;
+import io.confluent.common.config.ConfigDef;
 import org.apache.kafka.common.Configurable;
 
 import java.util.Map;
 
+/**
+ * AWS credentials provider that uses the AWS Security Token Service to assume a Role and create a
+ * temporary, short-lived session to use for authentication.  This credentials provider does not
+ * support refreshing the credentials in a background thread.
+ */
 public class AwsAssumeRoleCredentialsProvider implements AWSCredentialsProvider, Configurable {
 
-  public static final String EXTERNAL_ID_CONFIG = "external.id";
-  public static final String ROLE_ARN_CONFIG = "role.arn";
-  public static final String SESSION_NAME_CONFIG = "session.name";
+  public static final String ROLE_EXTERNAL_ID_CONFIG = "sts.role.external.id";
+  public static final String ROLE_ARN_CONFIG = "sts.role.arn";
+  public static final String ROLE_SESSION_NAME_CONFIG = "sts.role.session.name";
 
-  private String externalId;
+  private static final ConfigDef STS_CONFIG_DEF = new ConfigDef()
+      .define(
+          ROLE_EXTERNAL_ID_CONFIG,
+          ConfigDef.Type.STRING,
+          ConfigDef.Importance.MEDIUM,
+          "The role external ID used when retrieving session credentials under an assumed role."
+      ).define(
+          ROLE_ARN_CONFIG,
+          ConfigDef.Type.STRING,
+          ConfigDef.Importance.HIGH,
+          "Role ARN to use when starting a session."
+      ).define(
+          ROLE_SESSION_NAME_CONFIG,
+          ConfigDef.Type.STRING,
+          ConfigDef.Importance.HIGH,
+          "Role session name to use when starting a session"
+
+      );
+  
   private String roleArn;
-  private String sessionName;
+  private String roleExternalId;
+  private String roleSessionName;
 
   @Override
-  public void configure(Map<String, ?> map) {
-    externalId = getOptionalField(map, EXTERNAL_ID_CONFIG);
-    roleArn = getRequiredField(map, ROLE_ARN_CONFIG);
-    sessionName = getRequiredField(map, SESSION_NAME_CONFIG);
+  public void configure(Map<String, ?> configs) {
+    AbstractConfig config = new AbstractConfig(STS_CONFIG_DEF, configs);
+    roleArn = config.getString(ROLE_ARN_CONFIG);
+    roleExternalId = config.getString(ROLE_EXTERNAL_ID_CONFIG);
+    roleSessionName = config.getString(ROLE_SESSION_NAME_CONFIG);
   }
 
   @Override
@@ -47,9 +74,9 @@ public class AwsAssumeRoleCredentialsProvider implements AWSCredentialsProvider,
     AWSSecurityTokenServiceClientBuilder clientBuilder =
         AWSSecurityTokenServiceClientBuilder.standard();
     AWSCredentialsProvider provider =
-        new STSAssumeRoleSessionCredentialsProvider.Builder(roleArn, sessionName)
+        new STSAssumeRoleSessionCredentialsProvider.Builder(roleArn, roleSessionName)
             .withStsClient(clientBuilder.defaultClient())
-            .withExternalId(externalId)
+            .withExternalId(roleExternalId)
             .build();
 
     return provider.getCredentials();
@@ -57,46 +84,7 @@ public class AwsAssumeRoleCredentialsProvider implements AWSCredentialsProvider,
 
   @Override
   public void refresh() {
-    //Nothing to do really, since we are assuming a role.
-  }
-
-  private String getOptionalField(final Map<String, ?> map, final String fieldName) {
-    final Object field = map.get(fieldName);
-    if (isNotNull(field)) {
-      return field.toString();
-    }
-    return null;
-  }
-
-  private String getRequiredField(final Map<String, ?> map, final String fieldName) {
-    final Object field = map.get(fieldName);
-    verifyNotNull(field, fieldName);
-    final String fieldValue = field.toString();
-    verifyNotNullOrEmpty(fieldValue, fieldName);
-
-    return fieldValue;
-  }
-
-  private boolean isNotNull(final Object field) {
-    return null != field;
-  }
-
-  private boolean isNotNullOrEmpty(final String field) {
-    return null != field && !field.isEmpty();
-  }
-
-  private void verifyNotNull(final Object field, final String fieldName) {
-    if (!isNotNull(field)) {
-      throw new IllegalArgumentException(
-          String.format("The field '%1s' should not be null", fieldName));
-    }
-  }
-
-  private void verifyNotNullOrEmpty(final String field, final String fieldName) {
-    if (!isNotNullOrEmpty(field)) {
-      throw new IllegalArgumentException(
-          String.format("The field '%1s' should not be null or empty", fieldName));
-    }
+    //Nothing to do really, since we acquire a new session every getCredentials() call.
   }
 
 }
